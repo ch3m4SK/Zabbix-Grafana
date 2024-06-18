@@ -11,6 +11,7 @@ DB_PASSWORD="zabbix"
 # Update system
 echo "Actualizando el sistema..."
 sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl make gnupg
 
 # Configure locales
 echo "Configurando los locales..."
@@ -20,6 +21,14 @@ sudo sed -i '/^#.*en_US.UTF-8/s/^# //' /etc/locale.gen
 sudo dpkg-reconfigure -f noninteractive locales
 sudo update-locale LANG=en_US.UTF-8
 
+# instalar ODBC para monitoreo SQL
+curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
+curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list > /etc/apt/sources.list.d/mssql-release.list
+sudo apt-get update
+sudo ACCEPT_EULA=Y apt-get install msodbcsql18 unixodbc-dev -y
+sudo apt-get install unixodbc-dev libsnmp-dev libevent-dev libpcre3-dev -y
+
+
 # Zabbix Server MySQL Apache2 instalation 
 
 # Install Apache, MySQL, and PHP
@@ -28,8 +37,8 @@ sudo apt install -y apache2 mysql-server php libapache2-mod-php php-mysql php-xm
 
 # Add Zabbix repository
 echo "Agregando el repositorio de Zabbix..."
-wget https://repo.zabbix.com/zabbix/6.4/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.4-1+ubuntu22.04_all.deb
-sudo dpkg -i zabbix-release_6.4-1+ubuntu22.04_all.deb
+wget wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu22.04_all.deb
+sudo dpkg -i zabbix-release_7.0-1+ubuntu22.04_all.deb
 sudo apt update
 
 # Install Zabbix server, frontend, and agent
@@ -54,6 +63,16 @@ sudo sed -i "s/# DBPassword=/DBPassword=$DB_PASSWORD/" /etc/zabbix/zabbix_server
 sudo systemctl restart zabbix-server zabbix-agent
 sudo systemctl enable zabbix-server zabbix-agent
 
+#
+wget https://cdn.zabbix.com/zabbix/sources/stable/7.0/zabbix-7.0.0.tar.gz
+tar -zxvf zabbix-7.0.0.tar.gz
+cd zabbix-7.0.0
+./configure --enable-server --with-mysql --with-unixodbc
+make install
+
+sudo systemctl restart zabbix-server
+
+
 # Configure PHP for Zabbix frontend
 echo "Configurando PHP para Zabbix frontend..."
 sudo sed -i "s/^post_max_size = .*/post_max_size = 16M/" /etc/php/*/apache2/php.ini
@@ -70,6 +89,9 @@ sudo systemctl enable apache2
 
 # Install depencies
 sudo apt-get install -y apt-transport-https software-propierties-common wget
+
+# Install gpg
+sudo apt install gpg -y
 
 # Import GPG key
 sudo mkdir -p /etc/apt/keyrings/
@@ -88,12 +110,16 @@ sudo /bin/systemctl enable grafana-server
 
 sudo /bin/systemctl start grafana-server
 
+sudo mv /etc/odbc.ini /etc/odbc.default.ini
+sudo mv ./odbc.ini /etc/odbc.ini
+sudo mv ./odbcinst.ini /etc/odbcinst.ini
+
+
 # Get the server IP address
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 # Finishing up
 sudo clear
-
 
 echo "                       #######################################################################################################"
 echo "                                               Instalación y configuración de Zabbix & Grafana completada."
