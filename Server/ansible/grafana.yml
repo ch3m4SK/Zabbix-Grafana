@@ -1,0 +1,44 @@
+---
+- name: Instalar Grafana
+  hosts: zabbix
+  become: yes
+  tasks:
+    - name: Instalar dependencias
+      ansible.builtin.apt:
+        name: 
+          - adduser
+          - libfontconfig1
+          - musl
+        state: present
+        update_cache: yes
+
+    - name: Descargar el paquete de Grafana
+      ansible.builtin.get_url:
+        url: https://dl.grafana.com/oss/release/grafana_11.0.0_amd64.deb
+        dest: /tmp/grafana_11.0.0_amd64.deb
+        mode: 0440
+
+    - name: Verificar la descarga del paquete de Grafana
+      ansible.builtin.stat:
+        path: /tmp/grafana_11.0.0_amd64.deb
+      register: grafana_deb
+
+    - name: Mostrar resultado de la descarga
+      ansible.builtin.debug:
+        msg: "El archivo de Grafana se ha descargado: {{ grafana_deb.stat.exists }}"
+
+    - name: Instalar el paquete de Grafana
+      ansible.builtin.apt:
+        deb: /tmp/grafana_11.0.0_amd64.deb
+        state: present
+      when: grafana_deb.stat.exists
+
+    - name: Start grafana
+      ansible.builtin.service:
+        name: grafana-server
+        state: started
+
+    - name: Enable grafana
+      ansible.builtin.service:
+        name: grafana-server
+        enabled: yes
