@@ -1,0 +1,214 @@
+---
+- name: Instalar Zabbix Server 7.0 en Ubuntu 22.04
+  hosts: zabbix
+  become: yes
+
+  vars_files:
+    - variables-zabbix.yml
+
+  tasks:
+    - name: Installing Mysql and dependencies
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop:
+        - mysql-server
+        - mysql-client
+        - python3-mysqldb
+        - libmysqlclient-dev
+        - curl
+        - apache2
+        - adduser
+        - libfontconfig1
+        - musl
+        - libsnmp-dev
+        - libevent-dev
+        - libpcre3-dev
+        - gpg
+
+    - name: Agregar la clave de Microsoft
+      ansible.builtin.apt_key:
+        url: https://packages.microsoft.com/keys/microsoft.asc
+        state: present
+
+    - name: Agregar el repositorio de Microsoft
+      ansible.builtin.apt_repository:
+        repo: deb [arch=amd64] https://packages.microsoft.com/ubuntu/22.04/prod jammy main
+        filename: mssql-release
+        state: present
+
+    - name: Instalar msodbcsql18 y unixodbc-dev con aceptación de EULA
+      ansible.builtin.shell:
+        cmd: ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+
+    - name: Renombrar odbc.ini existente
+      ansible.builtin.command:
+        cmd: mv /etc/odbc.ini /etc/odbc.default.ini
+        creates: /etc/odbc.default.ini
+
+    - name: Mover odbc.ini
+      ansible.builtin.copy:
+        src: ./odbc.ini
+        dest: /etc/odbc.ini
+
+    - name: Mover odbcinst.ini
+      ansible.builtin.copy:
+        src: ./odbcinst.ini
+        dest: /etc/odbcinst.ini  
+
+    - name: Configurar locales
+      block:
+        - name: Generar locales en español
+          ansible.builtin.command: locale-gen es_ES.UTF-8
+        - name: Generar locales en inglés
+          ansible.builtin.command: locale-gen en_US.UTF-8
+        - name: Generar locales en alemán
+          ansible.builtin.command: locale-gen de_DE.UTF-8
+
+    - name: Descargar e instalar el repositorio de Zabbix
+      ansible.builtin.get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu22.04_all.deb
+        dest: /tmp/zabbix-release_7.0-1+ubuntu22.04_all.deb
+
+    - name: Instalar el repositorio de Zabbix
+      ansible.builtin.apt:
+        deb: /tmp/zabbix-release_7.0-1+ubuntu22.04_all.deb
+        state: present
+
+    - name: Actualizar cache de paquetes
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Instalar Zabbix Server, frontend y agente
+      ansible.builtin.apt:
+        name:
+          - zabbix-server-mysql
+          - zabbix-frontend-php
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+        state: present
+
+    - name: start and enable mysql service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Set root password for MySQL
+      mysql_user:
+        name: root
+        host: localhost
+        password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+    - name: Remove the anonymous MySQL user
+      mysql_user:
+        name: ''
+        host: localhost
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: creating mysql user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_pass }}"
+        priv: '*.*:ALL'
+        host: '%'
+        state: present
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: creating zabbix DB
+      mysql_db:
+        name: "{{ db_name }}"
+        encoding: utf8
+        collation: utf8_bin
+        state: present
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Enable remote login to mysql
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+        backup: yes
+      notify:
+        - Restart mysql
+
+    - name: Importar el esquema inicial y los datos a MySQL
+      ansible.builtin.mysql_db:
+        name: zabbix
+        state: import
+        target: /usr/share/zabbix-sql-scripts/mysql/server.sql.gz
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_pass }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Configurar Zabbix Server
+      ansible.builtin.replace:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '# DBPassword='
+        replace: 'DBPassword={{ db_pass }}'
+        backup: yes
+
+    - name: Reiniciar servicios de Zabbix
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: restarted
+        enabled: yes
+      loop:
+        - zabbix-server
+        - zabbix-agent
+
+    - name: Habilitar y reiniciar Apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
+        enabled: yes
+
+    - name: Eliminar el archivo de configuración temporal de Zabbix
+      ansible.builtin.file:
+        path: /tmp/zabbix-release_7.0-1+ubuntu22.04_all.deb
+        state: absent
+
+    - name: Descargar el paquete de Grafana
+      ansible.builtin.get_url:
+        url: https://dl.grafana.com/oss/release/grafana_11.0.0_amd64.deb
+        dest: /tmp/grafana_11.0.0_amd64.deb
+        mode: 0440
+
+    - name: Verificar la descarga del paquete de Grafana
+      ansible.builtin.stat:
+        path: /tmp/grafana_11.0.0_amd64.deb
+      register: grafana_deb
+
+    - name: Mostrar resultado de la descarga
+      ansible.builtin.debug:
+        msg: "El archivo de Grafana se ha descargado: {{ grafana_deb.stat.exists }}"
+
+    - name: Instalar el paquete de Grafana
+      ansible.builtin.apt:
+        deb: /tmp/grafana_11.0.0_amd64.deb
+        state: present
+      when: grafana_deb.stat.exists
+
+    - name: Start grafana
+      ansible.builtin.service:
+        name: grafana-server
+        state: started
+
+    - name: Enable grafana
+      ansible.builtin.service:
+        name: grafana-server
+        enabled: yes
+
+  handlers:
+    - name: Restart mysql
+      service:
+        name: mysql
+        state: restarted
